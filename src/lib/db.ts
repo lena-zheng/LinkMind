@@ -223,7 +223,26 @@ export function listBriefingItems(options: {
   category?: string;
   limit?: number;
 }) {
-  const date = options.date || todayInShanghai();
+  const requestedDate = options.date || todayInShanghai();
+  const language = options.language || "all";
+  const category = options.category || "all";
+  const date =
+    (getDatabase()
+      .prepare(
+        `
+        SELECT digest_date
+        FROM briefing_items
+        WHERE digest_date <= ?
+          AND (? = 'all' OR language = ?)
+          AND (? = 'all' OR category = ?)
+        GROUP BY digest_date
+        ORDER BY digest_date DESC
+        LIMIT 1
+      `,
+      )
+      .get(requestedDate, language, language, category, category) as { digest_date: string } | undefined)
+      ?.digest_date || requestedDate;
+
   const rows = getDatabase()
     .prepare(
       `
@@ -235,7 +254,7 @@ export function listBriefingItems(options: {
       LIMIT ?
     `,
     )
-    .all(date, options.language || "all", options.language || "all", options.category || "all", options.category || "all", options.limit || 200) as BriefingRow[];
+    .all(date, language, language, category, category, options.limit || 200) as BriefingRow[];
 
   return rows.map(toBriefingItem);
 }
