@@ -347,7 +347,7 @@ export default function Dashboard() {
     tab === "briefing"
       ? ui.briefingEyebrow
       : tab === "knowledge"
-        ? ui.knowledgeEyebrow(filteredKnowledge.length)
+        ? ui.knowledgeEyebrow()
         : ui.addEyebrow;
   const pageTitle = tab === "briefing" ? ui.briefingTitle : tab === "knowledge" ? ui.knowledgeTitle : ui.add;
   const languageSwitchLabel = uiLanguage === "en" ? ui.switchToChinese : ui.switchToEnglish;
