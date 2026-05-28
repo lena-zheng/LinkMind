@@ -6,79 +6,89 @@ type TranslationInput = {
 
 export type BriefingTranslation = TranslationInput;
 
-function safeJsonParse(value: string) {
-  const start = value.indexOf("{");
-  const end = value.lastIndexOf("}");
-  if (start === -1 || end === -1) return null;
-  try {
-    return JSON.parse(value.slice(start, end + 1)) as { items?: BriefingTranslation[] };
-  } catch {
-    return null;
-  }
+type LibreTranslateResponse = {
+  translatedText?: string;
+};
+
+const separator = "\n\n--- LINKMIND_SUMMARY ---\n\n";
+
+function splitTranslatedText(value: string, fallback: TranslationInput) {
+  const [title, ...summaryParts] = value.split("--- LINKMIND_SUMMARY ---");
+  const summary = summaryParts.join("--- LINKMIND_SUMMARY ---");
+
+  return {
+    title: title.trim() || fallback.title,
+    summary: summary.trim() || fallback.summary,
+  };
 }
 
-function normalizeItems(items: unknown, fallback: TranslationInput[]) {
-  if (!Array.isArray(items)) return [];
-  return items.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const value = item as Partial<BriefingTranslation>;
-    const original = fallback.find((entry) => entry.id === value.id);
-    if (!original) return [];
+async function translateText(value: string) {
+  const baseUrl = process.env.LIBRETRANSLATE_URL?.replace(/\/$/, "");
+  if (!baseUrl) {
+    throw new Error("Missing LIBRETRANSLATE_URL. Set it to a self-hosted LibreTranslate endpoint.");
+  }
 
-    return [
-      {
-        id: original.id,
-        title: typeof value.title === "string" && value.title.trim() ? value.title.trim() : original.title,
-        summary: typeof value.summary === "string" && value.summary.trim() ? value.summary.trim() : original.summary,
-      },
-    ];
+  const body: Record<string, string> = {
+    q: value,
+    source: "auto",
+    target: process.env.LIBRETRANSLATE_TARGET || "zh",
+    format: "text",
+  };
+
+  if (process.env.LIBRETRANSLATE_API_KEY) {
+    body.api_key = process.env.LIBRETRANSLATE_API_KEY;
+  }
+
+  const response = await fetch(`${baseUrl}/translate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
+
+  if (!response.ok) {
+    throw new Error(`LibreTranslate request failed with status ${response.status}.`);
+  }
+
+  const data = (await response.json()) as LibreTranslateResponse;
+  return data.translatedText || value;
+}
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  task: (item: T) => Promise<R>,
+) {
+  const results: R[] = [];
+  let nextIndex = 0;
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await task(items[currentIndex]);
+      }
+    }),
+  );
+
+  return results;
 }
 
 export async function translateBriefingsToChinese(items: TranslationInput[]) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("Missing OPENAI_API_KEY. Add it to enable Chinese article translation.");
-  }
-
   const sourceItems = items.slice(0, 100).map((item) => ({
     id: item.id,
     title: item.title.slice(0, 500),
     summary: item.summary.slice(0, 1200),
   }));
 
-  if (!sourceItems.length) return [];
+  return runWithConcurrency(sourceItems, 4, async (item) => {
+    const translatedText = await translateText(`${item.title}${separator}${item.summary}`);
+    const translated = splitTranslatedText(translatedText, item);
 
-  const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com";
-  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
-  const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.1,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Translate AI news titles and summaries into concise, natural Simplified Chinese. Preserve brand names, product names, model names, URLs, and technical terms when appropriate. Return strict JSON only: {\"items\":[{\"id\":number,\"title\":string,\"summary\":string}]}",
-        },
-        {
-          role: "user",
-          content: JSON.stringify({ items: sourceItems }),
-        },
-      ],
-    }),
+    return {
+      id: item.id,
+      title: translated.title,
+      summary: translated.summary,
+    };
   });
-
-  if (!response.ok) {
-    throw new Error(`Translation request failed with status ${response.status}.`);
-  }
-
-  const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  const parsed = safeJsonParse(data.choices?.[0]?.message?.content || "");
-  return normalizeItems(parsed?.items, sourceItems);
 }

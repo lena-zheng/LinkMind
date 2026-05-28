@@ -90,7 +90,7 @@ const UI_TEXT = {
     failedKnowledge: "知识库加载失败。",
     failedParse: "链接解析失败。",
     failedSave: "保存失败，请重试。",
-    failedTranslate: "资讯翻译失败，请检查 OPENAI_API_KEY。",
+    failedTranslate: "资讯翻译失败，请检查 LIBRETRANSLATE_URL。",
     fullText: "完整正文",
     item: "条",
     items: "条",
