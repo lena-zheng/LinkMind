@@ -17,6 +17,7 @@ import { CATEGORY_ALIASES, CATEGORIES, LEGACY_CATEGORY_LABELS, SOURCE_LABELS } f
 type Tab = "briefing" | "knowledge" | "add";
 type LoadState = "idle" | "loading";
 type UiLanguage = "en" | "zh";
+type BriefingTranslation = Pick<BriefingItem, "title" | "summary">;
 
 const UI_TEXT = {
   en: {
@@ -38,6 +39,7 @@ const UI_TEXT = {
     failedKnowledge: "Failed to load knowledge base.",
     failedParse: "Failed to parse the link.",
     failedSave: "Save failed. Please try again.",
+    failedTranslate: "Failed to translate briefing items.",
     fullText: "Full Text",
     item: "item",
     items: "items",
@@ -66,6 +68,7 @@ const UI_TEXT = {
     priority: "Priority",
     topPriorityBriefing: "Top priority briefing",
     topPriorityList: "Top priority list",
+    translatingBriefings: "Translating briefing items...",
     whyItMatters: "Why It Matters",
   },
   zh: {
@@ -87,6 +90,7 @@ const UI_TEXT = {
     failedKnowledge: "知识库加载失败。",
     failedParse: "链接解析失败。",
     failedSave: "保存失败，请重试。",
+    failedTranslate: "资讯翻译失败，请检查 OPENAI_API_KEY。",
     fullText: "完整正文",
     item: "条",
     items: "条",
@@ -115,6 +119,7 @@ const UI_TEXT = {
     priority: "优先级",
     topPriorityBriefing: "重点资讯",
     topPriorityList: "重点资讯列表",
+    translatingBriefings: "正在翻译资讯...",
     whyItMatters: "为什么重要",
   },
 } as const;
@@ -190,6 +195,9 @@ export default function Dashboard() {
   const [savingId, setSavingId] = useState<number | null>(null);
   const [featuredId, setFeaturedId] = useState<number | null>(null);
   const [message, setMessage] = useState("");
+  const [briefingTranslations, setBriefingTranslations] = useState<Record<number, BriefingTranslation>>({});
+  const [translationState, setTranslationState] = useState<LoadState>("idle");
+  const [translationUnavailable, setTranslationUnavailable] = useState(false);
   const ui = UI_TEXT[uiLanguage];
 
   const loadBriefings = useCallback(async () => {
@@ -237,6 +245,56 @@ export default function Dashboard() {
     const timer = setTimeout(() => void loadKnowledge(), 200);
     return () => clearTimeout(timer);
   }, [loadKnowledge]);
+
+  useEffect(() => {
+    if (uiLanguage !== "zh" || translationUnavailable || !briefings.length) return;
+
+    const untranslated = briefings.filter((item) => item.language !== "zh" && !briefingTranslations[item.id]);
+    if (!untranslated.length) return;
+
+    let cancelled = false;
+    const translateBriefings = async () => {
+      setTranslationState("loading");
+      try {
+        const response = await fetch("/api/translations/briefings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            items: untranslated.map((item) => ({
+              id: item.id,
+              title: item.title,
+              summary: item.summary,
+            })),
+          }),
+        });
+
+        if (!response.ok) {
+          const data = (await response.json()) as { error?: string };
+          throw new Error(data.error || ui.failedTranslate);
+        }
+
+        const data = (await response.json()) as { items: Array<{ id: number; title: string; summary: string }> };
+        if (cancelled) return;
+        setBriefingTranslations((current) => ({
+          ...current,
+          ...Object.fromEntries(data.items.map((item) => [item.id, { title: item.title, summary: item.summary }])),
+        }));
+      } catch (error) {
+        if (!cancelled) {
+          setTranslationUnavailable(true);
+          setMessage(error instanceof Error ? error.message : ui.failedTranslate);
+        }
+      } finally {
+        if (!cancelled) setTranslationState("idle");
+      }
+    };
+
+    void translateBriefings();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [briefingTranslations, briefings, translationUnavailable, ui.failedTranslate, uiLanguage]);
 
   const filteredKnowledge = useMemo(
     () =>
@@ -351,6 +409,9 @@ export default function Dashboard() {
         : ui.addEyebrow;
   const pageTitle = tab === "briefing" ? ui.briefingTitle : tab === "knowledge" ? ui.knowledgeTitle : ui.add;
   const languageSwitchLabel = uiLanguage === "en" ? ui.switchToChinese : ui.switchToEnglish;
+  const statusMessage = translationState === "loading" && uiLanguage === "zh" ? ui.translatingBriefings : message;
+  const getBriefingCopy = (item: BriefingItem) =>
+    uiLanguage === "zh" && item.language !== "zh" ? briefingTranslations[item.id] || item : item;
 
   return (
     <main className={`app-shell lang-${uiLanguage}`}>
@@ -443,14 +504,14 @@ export default function Dashboard() {
           </div>
         )}
 
-        {message && <div className="status-line">{message}</div>}
+        {statusMessage && <div className="status-line">{statusMessage}</div>}
 
         {tab === "briefing" && (
           <>
             {activeFeatured && (
               <section className="featured-briefing" aria-label={ui.topPriorityBriefing}>
                 <article className="featured-hero">
-                  <a className="featured-hero-link" href={activeFeatured.url} target="_blank" rel="noreferrer" aria-label={`${ui.openArticle} ${activeFeatured.title}`}>
+                  <a className="featured-hero-link" href={activeFeatured.url} target="_blank" rel="noreferrer" aria-label={`${ui.openArticle} ${getBriefingCopy(activeFeatured).title}`}>
                     {activeFeatured.imageUrl && (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img src={activeFeatured.imageUrl} alt="" />
@@ -460,8 +521,8 @@ export default function Dashboard() {
                         <span>{labelCategoryForLanguage(activeFeatured.category, uiLanguage)}</span>
                         <span>{ui.priority} {activeFeatured.importanceScore}</span>
                       </div>
-                      <h3>{activeFeatured.title}</h3>
-                      <p>{activeFeatured.summary}</p>
+                      <h3>{getBriefingCopy(activeFeatured).title}</h3>
+                      <p>{getBriefingCopy(activeFeatured).summary}</p>
                     </div>
                   </a>
                   <button
@@ -485,7 +546,7 @@ export default function Dashboard() {
                       onFocus={() => setFeaturedId(item.id)}
                       onMouseEnter={() => setFeaturedId(item.id)}
                     >
-                      <strong>{item.title}</strong>
+                      <strong>{getBriefingCopy(item).title}</strong>
                     </a>
                   ))}
                 </div>
@@ -499,7 +560,7 @@ export default function Dashboard() {
               )}
               {regularBriefings.map((item) => (
                 <article className="news-card" key={item.id}>
-                  <a className="news-card-link" href={item.url} target="_blank" rel="noreferrer" aria-label={`${ui.openArticle} ${item.title}`}>
+                  <a className="news-card-link" href={item.url} target="_blank" rel="noreferrer" aria-label={`${ui.openArticle} ${getBriefingCopy(item).title}`}>
                     {item.imageUrl && (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img className="news-thumb" src={item.imageUrl} alt="" loading="lazy" />
@@ -510,8 +571,8 @@ export default function Dashboard() {
                       ))}
                     </div>
                     <div className="card-main">
-                      <h3>{item.title}</h3>
-                      <p>{item.summary}</p>
+                      <h3>{getBriefingCopy(item).title}</h3>
+                      <p>{getBriefingCopy(item).summary}</p>
                     </div>
                   </a>
                   <div className="card-actions">
