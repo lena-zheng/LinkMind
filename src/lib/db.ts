@@ -340,3 +340,18 @@ export function getKnowledgeItem(id: number) {
   const row = getDatabase().prepare("SELECT * FROM knowledge_items WHERE id = ?").get(id) as KnowledgeRow | undefined;
   return row ? toKnowledgeItem(row) : null;
 }
+
+export function getLatestBriefingFetchedAt(date?: string) {
+  const requestedDate = date || todayInShanghai();
+  const row = getDatabase()
+    .prepare(
+      `
+      SELECT MAX(fetched_at) AS fetched_at
+      FROM briefing_items
+      WHERE digest_date = ?
+    `,
+    )
+    .get(requestedDate) as { fetched_at: string | null } | undefined;
+
+  return row?.fetched_at || null;
+}

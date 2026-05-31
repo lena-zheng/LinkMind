@@ -18,6 +18,17 @@ type Tab = "briefing" | "knowledge" | "add";
 type LoadState = "idle" | "loading";
 type UiLanguage = "en" | "zh";
 type BriefingTranslation = Pick<BriefingItem, "title" | "summary">;
+type BriefingRefresh = {
+  date: string;
+  latestFetchedAt: string | null;
+  scheduler: {
+    started: boolean;
+    lastRunAt: string | null;
+    lastSuccessAt: string | null;
+    lastError: string | null;
+    nextRunAt: string | null;
+  };
+};
 
 const UI_TEXT = {
   en: {
@@ -30,7 +41,7 @@ const UI_TEXT = {
     allCategories: "All categories",
     alreadySaved: "Already saved",
     briefingEmpty: "No briefing items yet. LinkMind will fetch the latest AI news automatically.",
-    briefingEyebrow: "Asia/Shanghai · Auto-refreshes daily at 09:00",
+    briefingEyebrow: (status?: string) => `Asia/Shanghai · Auto-refreshes daily at 09:00${status ? ` · ${status}` : ""}`,
     briefingTitle: "AI Briefing",
     dailyBriefing: "Daily Briefing",
     english: "English",
@@ -81,7 +92,7 @@ const UI_TEXT = {
     allCategories: "全部分类",
     alreadySaved: "已保存",
     briefingEmpty: "还没有资讯。LinkMind 会自动抓取最新 AI 资讯。",
-    briefingEyebrow: "北京时间 · 每天 09:00 自动刷新",
+    briefingEyebrow: (status?: string) => `北京时间 · 每天 09:00 自动刷新${status ? ` · ${status}` : ""}`,
     briefingTitle: "AI 资讯",
     dailyBriefing: "每日资讯",
     english: "英文",
@@ -198,7 +209,21 @@ export default function Dashboard() {
   const [briefingTranslations, setBriefingTranslations] = useState<Record<number, BriefingTranslation>>({});
   const [translationState, setTranslationState] = useState<LoadState>("idle");
   const [translationUnavailable, setTranslationUnavailable] = useState(false);
+  const [briefingRefresh, setBriefingRefresh] = useState<BriefingRefresh | null>(null);
   const ui = UI_TEXT[uiLanguage];
+
+  const formatRefreshTime = useCallback(
+    (iso: string | null) => {
+      if (!iso) return "";
+      return new Date(iso).toLocaleTimeString(uiLanguage === "zh" ? "zh-CN" : "en-US", {
+        timeZone: "Asia/Shanghai",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      });
+    },
+    [uiLanguage],
+  );
 
   const loadBriefings = useCallback(async () => {
     setBriefingState("loading");
@@ -206,8 +231,9 @@ export default function Dashboard() {
       const params = new URLSearchParams({ date: today(), language: "all", category: "all" });
       const response = await fetch(`/api/briefings?${params.toString()}`);
       if (!response.ok) throw new Error(ui.failedBriefing);
-      const data = (await response.json()) as { items: BriefingItem[] };
+      const data = (await response.json()) as { items: BriefingItem[]; refresh?: BriefingRefresh };
       setBriefings(data.items);
+      setBriefingRefresh(data.refresh || null);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : ui.failedBriefing);
     } finally {
@@ -401,9 +427,20 @@ export default function Dashboard() {
     }
   };
 
+  const refreshStatus =
+    briefingRefresh?.latestFetchedAt
+      ? uiLanguage === "zh"
+        ? `最近更新 ${formatRefreshTime(briefingRefresh.latestFetchedAt)}`
+        : `Last updated ${formatRefreshTime(briefingRefresh.latestFetchedAt)}`
+      : briefingRefresh?.scheduler.nextRunAt
+        ? uiLanguage === "zh"
+          ? `下次刷新 ${formatRefreshTime(briefingRefresh.scheduler.nextRunAt)}`
+          : `Next refresh ${formatRefreshTime(briefingRefresh.scheduler.nextRunAt)}`
+        : "";
+
   const pageEyebrow =
     tab === "briefing"
-      ? ui.briefingEyebrow
+      ? ui.briefingEyebrow(refreshStatus)
       : tab === "knowledge"
         ? ui.knowledgeEyebrow()
         : ui.addEyebrow;
